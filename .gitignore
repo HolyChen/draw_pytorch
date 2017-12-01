@@ -8,3 +8,5 @@ image/*
 !.vscode/
 # __pycache__ is cache for python code
 __pycache__
+# data is MNIST unzipped data
+data/
