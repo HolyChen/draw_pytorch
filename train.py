@@ -36,7 +36,7 @@ def train():
             optimizer.step()
             count += 1
             if count % 100 == 0:
-                print 'Epoch-{}; Count-{}; loss: {};'.format(epoch, count, avg_loss / 100)
+                print('Epoch-{}; Count-{}; loss: {};'.format(epoch, count, avg_loss / 100))
                 if count % 3000 == 0:
                     torch.save(model.state_dict(),'save/weights_%d.tar'%(count))
                     generate_image(count)
