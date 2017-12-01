@@ -1,0 +1,10 @@
+# ignore generate images
+image/*
+# save example iamges
+!image/example.png
+# ignore .idea, I use visual studio code
+.idea/
+# don't ignore vscode
+!.vscode/
+# __pycache__ is cache for python code
+__pycache__

@@ -70,7 +70,6 @@ class DrawModel(nn.Module):
             rng: range of filter indices
             delta: stride of filter
         """
-        print("compute_mu")
         rng_t, delta_t = align(rng, delta)
         tmp = (rng_t - self.N / 2 - 0.5) * delta_t
         tmp_t, g_t = align(tmp,g)
@@ -158,7 +157,6 @@ class DrawModel(nn.Module):
         gx = (self.A + 1) / 2 * (gx_ + 1)    # 22
         gy = (self.B + 1) / 2 * (gy_ + 1)    # 23
         delta = (max(self.A,self.B) - 1) / (self.N - 1) * torch.exp(log_delta)  # 24
-        print(delta.size())
         sigma2 = torch.exp(log_sigma_2)
         gamma = torch.exp(log_gamma)
 
