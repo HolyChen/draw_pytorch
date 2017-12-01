@@ -15,7 +15,10 @@ def unit_prefix(x, n=1):
     return x
 
 def align(x, y, start_dim=0):
+    print("Align")
     xd, yd = x.dim(), y.dim()
+    print(x.size())
+    print(y.size())
     if xd > yd: y = unit_prefix(y, xd - yd)
     elif yd > xd: x = unit_prefix(x, yd - xd)
 

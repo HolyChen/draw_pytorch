@@ -1,11 +1,33 @@
+#!/usr/bin/python3 
+# -*- coding: utf-8 -*-
+
+"""
+Paper:
+    DRAW: A Recurrent Neural Network For Image Generation
+        -- Karol Gregor etc. Google DeepMind 2015
+Created by chenzhaomin123
+Recorrected and commented by HolyChen
+"""
+
 import torch
 import torch.nn as nn
 from utility import *
 import torch.functional as F
 
 class DrawModel(nn.Module):
-    def __init__(self,T,A,B,z_size,N,dec_size,enc_size):
-        super(DrawModel,self).__init__()
+    """ DRAW Model
+    Use LSTM generate image with attention
+    """
+    def __init__(self ,T, A, B, z_size, N, dec_size, enc_size):
+        """ T: generation sequence length
+            A: width of image
+            B: height of image
+            z_size: the number of latent variable
+            N: read/write window size
+            dec_size: decoder hidden variable size
+            enc_size: encoder hidden variable size
+        """
+        super().__init__()
         self.T = T
         # self.batch_size = batch_size
         self.A = A
@@ -15,38 +37,51 @@ class DrawModel(nn.Module):
         self.dec_size = dec_size
         self.enc_size = enc_size
         self.cs = [0] * T
-        self.logsigmas,self.sigmas,self.mus = [0] * T,[0] * T,[0] * T
+        self.logsigmas, self.sigmas, self.mus = [0] * T, [0] * T, [0] * T
 
+        # encoder definition
         self.encoder = nn.LSTMCell(2 * N * N + dec_size, enc_size)
         self.encoder_gru = nn.GRUCell(2 * N * N + dec_size, enc_size)
-        self.mu_linear = nn.Linear(dec_size, z_size)
+        # map h^enc_(t) to z, that is sampling from pdf Q(Z_t|h^enc_(t))
+        self.mu_linear = nn.Linear(enc_size, z_size)
+        # map h^enc_(t) to sigma, that approximate sigma of Q(Z_t|h^enc_(t))
         self.sigma_linear = nn.Linear(dec_size, z_size)
 
-        self.decoder = nn.LSTMCell(z_size,dec_size)
-        self.decoder_gru = nn.GRUCell(z_size,dec_size)
-        self.dec_linear = nn.Linear(dec_size,5)
-        self.dec_w_linear = nn.Linear(dec_size,N*N)
+        # decoder definition
+        self.decoder = nn.LSTMCell(z_size, dec_size)
+        self.decoder_gru = nn.GRUCell(z_size, dec_size)
+        # map h^dec_(t) to g_X, g_Y, log(variance), log(stride), log(scalar intensity)
+        self.dec_linear = nn.Linear(dec_size, 5)
+        self.dec_w_linear = nn.Linear(dec_size, N * N)
 
+        # use sigmoid function to get "error image"
         self.sigmoid = nn.Sigmoid()
 
 
-
     def normalSample(self):
-        return Variable(torch.randn(self.batch_size,self.z_size))
+        """ Get initial batch sampling using white noise
+        """
+        return Variable(torch.randn(self.batch_size, self.z_size))
 
-    # correct
-    def compute_mu(self,g,rng,delta):
-        rng_t,delta_t = align(rng,delta)
+    # correct !!!! INCORRECT
+    def compute_mu(self, g, rng, delta):
+        """ Compute mu of gaussian filters.
+            g: X or Y coordinate of the filter
+            rng: range of filter indices
+            delta: stride of filter
+        """
+        print("compute_mu")
+        rng_t, delta_t = align(rng, delta)
         tmp = (rng_t - self.N / 2 - 0.5) * delta_t
-        tmp_t,g_t = align(tmp,g)
+        tmp_t, g_t = align(tmp,g)
         mu = tmp_t + g_t
         return mu
 
     # correct
     def filterbank(self,gx,gy,sigma2,delta):
-        rng = Variable(torch.arange(0,self.N).view(1,-1))
-        mu_x = self.compute_mu(gx,rng,delta)
-        mu_y = self.compute_mu(gy,rng,delta)
+        rng = Variable(torch.arange(0, self.N).view(1,-1))
+        mu_x = self.compute_mu(gx, rng, delta)
+        mu_y = self.compute_mu(gy, rng, delta)
 
         a = Variable(torch.arange(0,self.A).view(1,1,-1))
         b = Variable(torch.arange(0,self.B).view(1,1,-1))
@@ -67,7 +102,7 @@ class DrawModel(nn.Module):
 
         enc_state = Variable(torch.zeros(self.batch_size,self.enc_size))
         dec_state = Variable(torch.zeros(self.batch_size, self.dec_size))
-        for t in xrange(self.T):
+        for t in range(self.T):
             c_prev = Variable(torch.zeros(self.batch_size,self.A * self.B)) if t == 0 else self.cs[t-1]
             x_hat = x - self.sigmoid(c_prev)     # 3
             r_t = self.read(x,x_hat,h_dec_prev)
@@ -86,7 +121,7 @@ class DrawModel(nn.Module):
         Lx = criterion(x_recons,x) * self.A * self.B
         Lz = 0
         kl_terms = [0] * T
-        for t in xrange(self.T):
+        for t in range(self.T):
             mu_2 = self.mus[t] * self.mus[t]
             sigma_2 = self.sigmas[t] * self.sigmas[t]
             logsigma = self.logsigmas[t]
@@ -123,6 +158,7 @@ class DrawModel(nn.Module):
         gx = (self.A + 1) / 2 * (gx_ + 1)    # 22
         gy = (self.B + 1) / 2 * (gy_ + 1)    # 23
         delta = (max(self.A,self.B) - 1) / (self.N - 1) * torch.exp(log_delta)  # 24
+        print(delta.size())
         sigma2 = torch.exp(log_sigma_2)
         gamma = torch.exp(log_gamma)
 
@@ -171,7 +207,7 @@ class DrawModel(nn.Module):
         h_dec_prev = Variable(torch.zeros(self.batch_size,self.dec_size),volatile = True)
         dec_state = Variable(torch.zeros(self.batch_size, self.dec_size),volatile = True)
 
-        for t in xrange(self.T):
+        for t in range(self.T):
             c_prev = Variable(torch.zeros(self.batch_size, self.A * self.B)) if t == 0 else self.cs[t - 1]
             z = self.normalSample()
             h_dec, dec_state = self.decoder(z, (h_dec_prev, dec_state))
