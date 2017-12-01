@@ -8,13 +8,17 @@ import matplotlib.pyplot as plt
 def Variable(data, *args, **kwargs):
     if USE_CUDA:
         data = data.cuda()
-    return autograd.Variable(data,*args, **kwargs)
+    return autograd.Variable(data, *args, **kwargs)
 
 def unit_prefix(x, n=1):
     for i in range(n): x = x.unsqueeze(0)
     return x
 
 def align(x, y, start_dim=0):
+    """ Expand x or y, so x and y have the same dimension that is the max one of origin x or y.
+        It is used to expand a tensor with batch-dimension which used to first dimension of tensor.
+    """
+    # make x and y have same dimension
     xd, yd = x.dim(), y.dim()
     if xd > yd: y = unit_prefix(y, xd - yd)
     elif yd > xd: x = unit_prefix(x, yd - xd)
@@ -22,6 +26,7 @@ def align(x, y, start_dim=0):
     xs, ys = list(x.size()), list(y.size())
     nd = len(ys)
     for i in range(start_dim, nd):
+        # because the unsqueezing happen at the front of tensor, so only change them
         td = nd-i-1
         if   ys[td]==1: ys[td] = xs[td]
         elif xs[td]==1: xs[td] = ys[td]
