@@ -15,14 +15,14 @@ from utility import *
 import torch.functional as F
 
 class DrawModel(nn.Module):
-    """ DRAW Model
+    """DRAW Model
 
     Use LSTM generate image with attention, the model is defined in the paper:
         "DRAW: A Recurrent Neural Network For Image Generation".
     """
 
     def __init__(self ,T, A, B, z_size, N, dec_size, enc_size):
-        """ init the model.
+        """Init the model.
 
         Args:
             T: generation sequence length
@@ -63,14 +63,8 @@ class DrawModel(nn.Module):
         # use sigmoid function to get "error image"
         self.sigmoid = nn.Sigmoid()
 
-
-    def normalSample(self):
-        """ Get initial batch sampling using white noise
-        """
-        return Variable(torch.randn(self.batch_size, self.z_size))
-
-    def compute_mu(self, g, rng, delta):
-        """ Compute single-dimension mu(mean) of gaussian filters, def by formula (19), (20)
+    def _compute_mu(self, g, rng, delta):
+        """Compute single-dimension mu(mean) of gaussian filters, def by formula (19), (20)
 
         Args:
             g: X or Y coordinate of the filter
@@ -85,11 +79,10 @@ class DrawModel(nn.Module):
         tmp = (rng_t - self.N / 2 - 0.5) * delta_t
         tmp_t, g_t = align(tmp, g)
         mu = tmp_t + g_t
-        print(mu.size())
         return mu
 
-    def filterbank_matrices(self, a, mu, sigma2, epsilon=1e-9):
-        """ genrate filterbank matrix, call by function filterbank
+    def _filterbank_matrices(self, a, mu, sigma2, epsilon=1e-9):
+        """Genrate filterbank matrix, call by function filterbank
         
         Args:
             a: x or y coordinates [0, self.A or self.B), size (1, 1, size.A or size.B)
@@ -106,8 +99,8 @@ class DrawModel(nn.Module):
         F = F / (F.sum(2, True).expand_as(F) + epsilon)
         return F
 
-    def filterbank(self, gx, gy, sigma2, delta):
-        """ Calculate filter bank defined by formulas (25), (26)
+    def _filterbank(self, gx, gy, sigma2, delta):
+        """Calculate filter bank defined by formulas (25), (26)
         
         Args: 
             gx: grid center X coodinate, def by formula (22)
@@ -116,8 +109,8 @@ class DrawModel(nn.Module):
             delta: stride between the gaussian kernel, def by formula (24)
         """
         rng = Variable(torch.arange(0, self.N).view(1, -1))
-        mu_x = self.compute_mu(gx, rng, delta)
-        mu_y = self.compute_mu(gy, rng, delta)
+        mu_x = self._compute_mu(gx, rng, delta)
+        mu_y = self._compute_mu(gy, rng, delta)
 
         a = Variable(torch.arange(0, self.A).view(1, 1, -1))
         b = Variable(torch.arange(0, self.B).view(1, 1, -1))
@@ -126,13 +119,13 @@ class DrawModel(nn.Module):
         mu_y = mu_y.view(-1, self.N, 1)
         sigma2 = sigma2.view(-1, 1, 1)
 
-        Fx = self.filterbank_matrices(a, mu_x, sigma2) # (25)
-        Fy = self.filterbank_matrices(b, mu_y, sigma2) # (26)
+        Fx = self._filterbank_matrices(a, mu_x, sigma2) # (25)
+        Fy = self._filterbank_matrices(b, mu_y, sigma2) # (26)
 
         return Fx, Fy
 
-    def attn_window(self, h_dec):
-        """ Generate attention window, def in formula (19) ~ (26)
+    def _attn_window(self, h_dec):
+        """Generate attention window, def in formula (19) ~ (26)
 
         Args:
             h_dec: decoder hidden variable
@@ -148,52 +141,76 @@ class DrawModel(nn.Module):
         sigma2 = torch.exp(log_sigma_2)
         gamma = torch.exp(log_gamma)
 
-        return self.filterbank(gx, gy, sigma2, delta), gamma # (19), (20, (25, (26)
+        return self._filterbank(gx, gy, sigma2, delta), gamma # (19), (20, (25, (26)
 
-    # correct
-    def read(self,x,x_hat,h_dec_prev):
-        (Fx,Fy),gamma = self.attn_window(h_dec_prev)
-        def filter_img(img,Fx,Fy,gamma,A,B,N):
-            Fxt = Fx.transpose(2,1)
-            img = img.view(-1,B,A)
-            # img = img.transpose(2,1)
-            # glimpse = matmul(Fy,matmul(img,Fxt))
+    def _read(self, x, x_hat, h_dec_prev):
+        """Read operation, def in formula (27)
+
+        Args:
+            x: source image reshpaed as vector, size [self.batch_size, width * height]
+            x_hat: error image reshaped as vector, size [self.batch_size, width * height]
+            h_dec_prev: decoder hidden variable last step
+        """
+
+        def filter_img(img, Fx, Fy, gamma, A, B, N):
+            """Apply gaussion filter grid to image
+
+            Args:
+                img: images reshape as vector, size [self.batch_size, width * height]
+                Fx: x coorinate filter bank matrix, size [self.batch_size, self.N, A]
+                Fy: y coorinate filter bank matrix, size [self.batch_size, self.N, B]
+                gamma: scalar intensity, def in formula (21)
+                A: width of the image
+                B: height of the image
+                N: size of filter window
+            """
+            Fxt = Fx.transpose(2, 1)
+            img = img.view(-1, B, A)
             glimpse = Fy.bmm(img.bmm(Fxt))
-            glimpse = glimpse.view(-1,N*N)
-            return glimpse * gamma.view(-1,1).expand_as(glimpse)
-        x = filter_img(x,Fx,Fy,gamma,self.A,self.B,self.N)
-        x_hat = filter_img(x_hat,Fx,Fy,gamma,self.A,self.B,self.N)
-        return torch.cat((x,x_hat),1)
+            glimpse = glimpse.view(-1, N * N)
+            return glimpse * gamma.view(-1, 1).expand_as(glimpse)
+
+        (Fx, Fy), gamma = self._attn_window(h_dec_prev)
+        x = filter_img(x, Fx, Fy, gamma, self.A, self.B, self.N)
+        x_hat = filter_img(x_hat, Fx, Fy, gamma, self.A, self.B, self.N)
+        return torch.cat((x, x_hat), 1)
 
     # correct
-    def write(self,h_dec=0):
+    def _write(self, h_dec=0):
         w = self.dec_w_linear(h_dec)
         w = w.view(self.batch_size,self.N,self.N)
         # w = Variable(torch.ones(4,5,5) * 3)
         # self.batch_size = 4
-        (Fx,Fy),gamma = self.attn_window(h_dec)
+        (Fx,Fy),gamma = self._attn_window(h_dec)
         Fyt = Fy.transpose(2,1)
         # wr = matmul(Fyt,matmul(w,Fx))
         wr = Fyt.bmm(w.bmm(Fx))
         wr = wr.view(self.batch_size,self.A*self.B)
         return wr / gamma.view(-1,1).expand_as(wr)
 
-    def sampleQ(self,h_enc):
-        e = self.normalSample()
-        # mu_sigma = self.mu_sigma_linear(h_enc)
-        # mu = mu_sigma[:, :self.z_size]
-        # log_sigma = mu_sigma[:, self.z_size:]
-        mu = self.mu_linear(h_enc)           # 1
-        log_sigma = self.sigma_linear(h_enc) # 2
+    def _normalSample(self):
+        """Get random white noise matrix to be applied to sigma
+        """
+        return Variable(torch.randn(self.batch_size, self.z_size))
+
+    def _sampleQ(self, h_enc):
+        """Sample from distribution Q(Z_t|h^enc_(t))
+        
+        Args:
+            h_enc: encoder hidden variable this step
+        """
+        rand_offset = self._normalSample()
+        mu = self.mu_linear(h_enc)           # (1)
+        log_sigma = self.sigma_linear(h_enc) # (2)
         sigma = torch.exp(log_sigma)
 
-        return mu + sigma * e , mu , log_sigma, sigma
+        return (mu + sigma * rand_offset), mu, log_sigma, sigma
 
-    def loss(self,x):
-            self.forward(x)
+    def loss(self, x):
+        self.forward(x)
         criterion = nn.BCELoss()
         x_recons = self.sigmoid(self.cs[-1])
-        Lx = criterion(x_recons,x) * self.A * self.B
+        Lx = criterion(x_recons, x) * self.A * self.B
         Lz = 0
         kl_terms = [0] * T
         for t in range(self.T):
@@ -201,10 +218,10 @@ class DrawModel(nn.Module):
             sigma_2 = self.sigmas[t] * self.sigmas[t]
             logsigma = self.logsigmas[t]
             # Lz += (0.5 * (mu_2 + sigma_2 - 2 * logsigma))    # 11
-            kl_terms[t] = 0.5 * torch.sum(mu_2+sigma_2-2 * logsigma,1) - self.T * 0.5
+            kl_terms[t] = 0.5 * torch.sum(mu_2 + sigma_2 - 2 * logsigma, 1) - self.T * 0.5 # (11)
             Lz += kl_terms[t]
         # Lz -= self.T / 2
-        Lz = torch.mean(Lz)    ####################################################
+        Lz = torch.mean(Lz)    # We use minibatch trainning, so the error should be blend
         loss = Lz + Lx    # 12
         return loss
 
@@ -218,26 +235,27 @@ class DrawModel(nn.Module):
 
         for t in range(self.T):
             c_prev = Variable(torch.zeros(self.batch_size, self.A * self.B)) if t == 0 else self.cs[t - 1]
-            x_hat = x - self.sigmoid(c_prev)     # 3
-            r_t = self.read(x,x_hat, h_dec_prev)
+            x_hat = x - self.sigmoid(c_prev) # (3)
+            r_t = self._read(x,x_hat, h_dec_prev)
             h_enc_prev, enc_state = self.encoder(torch.cat((r_t, h_dec_prev), 1), (h_enc_prev, enc_state))
             # h_enc = self.encoder_gru(torch.cat((r_t,h_dec_prev),1),h_enc_prev)
-            z,self.mus[t],self.logsigmas[t],self.sigmas[t] = self.sampleQ(h_enc_prev)
-            h_dec,dec_state = self.decoder(z, (h_dec_prev, dec_state))
+            z, self.mus[t], self.logsigmas[t], self.sigmas[t] = self._sampleQ(h_enc_prev)
+            h_dec, dec_state = self.decoder(z, (h_dec_prev, dec_state))
             # h_dec = self.decoder_gru(z, h_dec_prev)
-            self.cs[t] = c_prev + self.write(h_dec)
+            self.cs[t] = c_prev + self._write(h_dec)
             h_dec_prev = h_dec
 
-    def generate(self,batch_size=64):
+    def generate(self, batch_size=64):
         self.batch_size = batch_size
         h_dec_prev = Variable(torch.zeros(self.batch_size,self.dec_size),volatile = True)
         dec_state = Variable(torch.zeros(self.batch_size, self.dec_size),volatile = True)
 
         for t in range(self.T):
             c_prev = Variable(torch.zeros(self.batch_size, self.A * self.B)) if t == 0 else self.cs[t - 1]
-            z = self.normalSample()
+            # we assume z follow standard normal distribution
+            z = self._normalSample()
             h_dec, dec_state = self.decoder(z, (h_dec_prev, dec_state))
-            self.cs[t] = c_prev + self.write(h_dec)
+            self.cs[t] = c_prev + self._write(h_dec)
             h_dec_prev = h_dec
         imgs = []
         for img in self.cs:

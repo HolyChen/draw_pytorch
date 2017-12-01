@@ -15,8 +15,8 @@ train_loader = torch.utils.data.DataLoader(
                        transforms.ToTensor()])),
     batch_size=batch_size, shuffle=False)
 
-model = DrawModel(T,A,B,z_size,N,dec_size,enc_size)
-optimizer = optim.Adam(model.parameters(),lr=learning_rate,betas=(beta1,0.999))
+model = DrawModel(T, A, B, z_size, N, dec_size, enc_size)
+optimizer = optim.Adam(model.parameters(), lr=learning_rate, betas=(beta1, 0.999))
 
 if USE_CUDA:
     model.cuda()
@@ -25,7 +25,7 @@ def train():
     avg_loss = 0
     count = 0
     for epoch in range(epoch_num):
-        for data,_ in train_loader:
+        for data, _ in train_loader:
             bs = data.size()[0]
             data = Variable(data).view(bs, -1)
             optimizer.zero_grad()

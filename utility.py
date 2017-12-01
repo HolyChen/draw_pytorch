@@ -17,6 +17,7 @@ def unit_prefix(x, n=1):
 def align(x, y, start_dim=0):
     """ Expand x or y, so x and y have the same dimension that is the max one of origin x or y.
         It is used to expand a tensor with batch-dimension which used to first dimension of tensor.
+        Another use is to expand mu to size of image.
     """
     # make x and y have same dimension
     xd, yd = x.dim(), y.dim()
