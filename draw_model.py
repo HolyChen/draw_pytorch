@@ -175,18 +175,19 @@ class DrawModel(nn.Module):
         x_hat = filter_img(x_hat, Fx, Fy, gamma, self.A, self.B, self.N)
         return torch.cat((x, x_hat), 1)
 
-    # correct
     def _write(self, h_dec=0):
-        w = self.dec_w_linear(h_dec)
-        w = w.view(self.batch_size,self.N,self.N)
-        # w = Variable(torch.ones(4,5,5) * 3)
-        # self.batch_size = 4
-        (Fx,Fy),gamma = self._attn_window(h_dec)
-        Fyt = Fy.transpose(2,1)
-        # wr = matmul(Fyt,matmul(w,Fx))
-        wr = Fyt.bmm(w.bmm(Fx))
-        wr = wr.view(self.batch_size,self.A*self.B)
-        return wr / gamma.view(-1,1).expand_as(wr)
+        """Write operation, def in formula (28), (29)
+
+        Args:
+            h_dec: decoder hidden variable current step
+        """
+        w = self.dec_w_linear(h_dec) # (28)
+        w = w.view(self.batch_size, self.N, self.N)
+        (Fx,Fy), gamma = self._attn_window(h_dec)
+        Fyt = Fy.transpose(2, 1)
+        wr = Fyt.bmm(w.bmm(Fx)) # (29)
+        wr = wr.view(self.batch_size, self.A * self.B)
+        return wr / gamma.view(-1, 1).expand_as(wr)
 
     def _normalSample(self):
         """Get random white noise matrix to be applied to sigma
@@ -207,25 +208,39 @@ class DrawModel(nn.Module):
         return (mu + sigma * rand_offset), mu, log_sigma, sigma
 
     def loss(self, x):
+        """Loss funciton to minimize. See section 2.2 and 4
+
+        Args:
+            x: input, size [self.batch_size, self.A * self.B]
+        """
+
         self.forward(x)
-        criterion = nn.BCELoss()
+
+        # Lx
+        criterion = nn.BCELoss()  # use binary cross entropy as loss function.
         x_recons = self.sigmoid(self.cs[-1])
-        Lx = criterion(x_recons, x) * self.A * self.B
-        Lz = 0
+        Lx = criterion(x_recons, x) * self.A * self.B # cancel average
+
+        # Lz
+        Lz = Variable(torch.zeros(self.batch_size))
         kl_terms = [0] * T
         for t in range(self.T):
             mu_2 = self.mus[t] * self.mus[t]
             sigma_2 = self.sigmas[t] * self.sigmas[t]
             logsigma = self.logsigmas[t]
-            # Lz += (0.5 * (mu_2 + sigma_2 - 2 * logsigma))    # 11
             kl_terms[t] = 0.5 * torch.sum(mu_2 + sigma_2 - 2 * logsigma, 1) - self.T * 0.5 # (11)
             Lz += kl_terms[t]
-        # Lz -= self.T / 2
-        Lz = torch.mean(Lz)    # We use minibatch trainning, so the error should be blend
-        loss = Lz + Lx    # 12
+        Lz = torch.mean(Lz)    # We use minibatch training, do average over minibatch
+        loss = Lz + Lx    # (12)
         return loss
 
     def forward(self, x):
+        """forward
+
+        Args:
+            x: input, size [self.batch_size, self.A * self.B]
+        """
+
         self.batch_size = x.size()[0]
         h_dec_prev = Variable(torch.zeros(self.batch_size, self.dec_size))
         h_enc_prev = Variable(torch.zeros(self.batch_size, self.enc_size))
@@ -236,26 +251,29 @@ class DrawModel(nn.Module):
         for t in range(self.T):
             c_prev = Variable(torch.zeros(self.batch_size, self.A * self.B)) if t == 0 else self.cs[t - 1]
             x_hat = x - self.sigmoid(c_prev) # (3)
-            r_t = self._read(x,x_hat, h_dec_prev)
-            h_enc_prev, enc_state = self.encoder(torch.cat((r_t, h_dec_prev), 1), (h_enc_prev, enc_state))
-            # h_enc = self.encoder_gru(torch.cat((r_t,h_dec_prev),1),h_enc_prev)
-            z, self.mus[t], self.logsigmas[t], self.sigmas[t] = self._sampleQ(h_enc_prev)
-            h_dec, dec_state = self.decoder(z, (h_dec_prev, dec_state))
-            # h_dec = self.decoder_gru(z, h_dec_prev)
-            self.cs[t] = c_prev + self._write(h_dec)
-            h_dec_prev = h_dec
+            r_t = self._read(x, x_hat, h_dec_prev) # (4)
+            h_enc_prev, enc_state = self.encoder(torch.cat((r_t, h_dec_prev), 1), (h_enc_prev, enc_state)) # (5)
+            z, self.mus[t], self.logsigmas[t], self.sigmas[t] = self._sampleQ(h_enc_prev) # (6)
+            h_dec, dec_state = self.decoder(z, (h_dec_prev, dec_state)) # (7)
+            self.cs[t] = c_prev + self._write(h_dec) # (8)
+            h_dec_prev = h_dec # next step
 
     def generate(self, batch_size=64):
+        """Generate test image
+
+        Args:
+            batch_size: the number of image to generate, default 64
+        """
         self.batch_size = batch_size
-        h_dec_prev = Variable(torch.zeros(self.batch_size,self.dec_size),volatile = True)
-        dec_state = Variable(torch.zeros(self.batch_size, self.dec_size),volatile = True)
+        h_dec_prev = Variable(torch.zeros(self.batch_size, self.dec_size), volatile = True)
+        dec_state = Variable(torch.zeros(self.batch_size, self.dec_size), volatile = True)
 
         for t in range(self.T):
             c_prev = Variable(torch.zeros(self.batch_size, self.A * self.B)) if t == 0 else self.cs[t - 1]
-            # we assume z follow standard normal distribution
-            z = self._normalSample()
-            h_dec, dec_state = self.decoder(z, (h_dec_prev, dec_state))
-            self.cs[t] = c_prev + self._write(h_dec)
+            # we assume z follow standard normal distribution, sample z
+            z = self._normalSample() # (13)
+            h_dec, dec_state = self.decoder(z, (h_dec_prev, dec_state)) #(14)
+            self.cs[t] = c_prev + self._write(h_dec) # (15)
             h_dec_prev = h_dec
         imgs = []
         for img in self.cs:
@@ -297,4 +315,3 @@ class DrawModel(nn.Module):
 #     x = Variable(torch.zeros(8,28*28))
 #     loss = model.loss(x)
 #     print loss
-
